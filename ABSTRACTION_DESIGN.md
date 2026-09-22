@@ -4,9 +4,14 @@ Built on the Activity 1 decomposition tree (`README.md`). This document turns th
 decomposition views into **modules with explicit boundaries**: what each module exposes,
 what it hides, and how modules talk to each other.
 
-**v2** — revised after a critical design review found three unnecessary abstractions, three
-modules doing two jobs each, two leaking internal details, and two vague interfaces. See
-[Changelog](#changelog-v1--v2) for the full list. All tables below reflect the fixed design.
+**v3** — revised twice: v2 fixed three unnecessary abstractions, three modules doing two jobs
+each, two leaking internal details, and two vague interfaces found by a critical design review.
+v3 then ran the design against a five-criteria evaluation checklist (clarity, necessity,
+coverage, single responsibility, modularity) and a five-item common-mistakes checklist, which
+surfaced two more issues: `IdentityService` was still mixing two responsibilities, and
+`ReportingService` had vague method names with unpinned read paths. Both are fixed below. See
+[Changelog v1→v2](#changelog-v1--v2) and [Changelog v2→v3](#changelog-v2--v3) for the full
+history. All tables reflect the current, fixed design.
 
 ## Design principle
 
@@ -27,16 +32,17 @@ detail:
 
 | Module | Owns (data) | Contains (objects) | Exposes (public interface) | Hides (implementation) |
 |---|---|---|---|---|
-| **Identity & Onboarding** (`IdentityService`) | Student Profile Data | `Student` | `register()`, `verifyDocuments()`, `getProfileSummary()` | Document storage format, verification vendor/algorithm, raw profile schema, and the apply→upload→verify→confirm step sequence (registration never leaves this module, so it's an internal method, not a separate orchestrator) |
-| **Academic Planning** (`AcademicPlanningService`) | Course & Curriculum Data | `Course` | `browseCatalog()`, `checkPrerequisites()`, `enrol(studentId, courseId)` | Prerequisite graph structure, catalog storage, seat-counting logic, and the browse→select→check→confirm sequence (enrolment is internal to this module) |
+| **Identity Records** (`IdentityService`) | Student Profile Data | `Student` | `register()`, `getProfileSummary()` | Raw profile schema, and the internal step of handing a new applicant to `DocumentVerificationService` before confirming registration |
+| **Document Verification** (`DocumentVerificationService`) | Verification Data (uploaded docs, verification status) | — | `submitDocuments(studentId, docs)`, `verifyDocuments(studentId)` | Verification vendor/algorithm, document storage format — split out from Identity Records because KYC/document checking is a distinct job (often a third-party integration) from owning the student's profile record |
+| **Academic Planning** (`AcademicPlanningService`) | Course & Curriculum Data | `Course` | `browseCatalog()`, `checkPrerequisites()`, `enrol(studentId, courseId)`, `getEnrolmentStats()` | Prerequisite graph structure, catalog storage, seat-counting logic, and the browse→select→check→confirm sequence (enrolment is internal to this module) |
 | **Timetabling** (`TimetablingService`) | Timetable Data | `TimetableSession` | `generateTimetable()`, `getSchedule(studentId)`, `requestChange()` | Clash-detection algorithm, room-allocation heuristic, session storage, and *when/how often* generation runs (a scheduler just calls `generateTimetable()` — no separate "run" abstraction) |
-| **Fee & Payment** (`BillingService`) | Financial Data | `Invoice` | `calculateFees()`, `pay(invoiceId, method)`, `void(invoiceId)`, `compensate(actionId)` | Payment gateway integration, ledger/transaction storage, tax rules, what "reversing" a specific charge actually requires |
+| **Fee & Payment** (`BillingService`) | Financial Data | `Invoice` | `calculateFees()`, `pay(invoiceId, method)`, `void(invoiceId)`, `compensate(actionId)`, `getFinancialSummary()` | Payment gateway integration, ledger/transaction storage, tax rules, what "reversing" a specific charge actually requires |
 | **Credential Issuance** (`CredentialIssuanceService`) | Credential Data | `IDCredential` | `issueCredential(studentId)`, `activate()`, `revoke()` | Credential encoding, expiry computation |
 | **Access Control** (`AccessControlService`) | Access-level grants | — | `checkAccess(credentialId, resource)`, `grant()`, `compensate(actionId)` | Access-level mapping, per-resource permission rules — split out from issuance because it's an ongoing per-request decision, not a one-time lifecycle event |
 | **Notifications** (`NotificationService`) | Notification Log | — | `notify(event: NotificationEvent)` | Message templating, delivery channel (email/SMS/push) — narrowed to a typed `NotificationEvent`, not an untyped blob |
 | **Support** (`SupportTicketService`) | Ticket Store | `SupportTicket` | `openTicket()`, `assign()`, `escalate()`, `close()` | Ticket queueing/assignment logic — split out from Notifications; a help-desk queue and a broadcast alert are different jobs |
 | **Audit** (`AuditService`) | Audit Log (raw, immutable) | — | `append(event)`, `query(filter)` | Append-only storage mechanism, retention policy — exposes only raw records, never aggregates |
-| **Reporting** (`ReportingService`) | — (reads from Audit + other services' read interfaces) | — | `generateReport()`, `getDashboard()` | Aggregation/analytics pipeline — split out from Audit; regulatory retention and BI querying have opposite requirements |
+| **Reporting** (`ReportingService`) | — (owns no data; reads only through the named methods below) | — | `generateComplianceReport()`, `generateEnrolmentDashboard()` | Aggregation/analytics pipeline — split out from Audit; regulatory retention and BI querying have opposite requirements. Its two methods pin down exactly what it reads: `generateComplianceReport()` calls only `AuditService.query()`; `generateEnrolmentDashboard()` calls only `AcademicPlanningService.getEnrolmentStats()` and `BillingService.getFinancialSummary()` — never a store directly. |
 
 Rule of thumb applied everywhere: **the interface exposes intent, never state.** No module hands
 out a raw struct/record for another module to mutate — e.g. `Invoice` exposes `pay()` and
@@ -47,7 +53,7 @@ reopened) inside the object that owns them.
 
 | Object | Exposes | Fixed from v1 |
 |---|---|---|
-| `Student` | `register()`, `enrol()`, `getStatus()` | Removed `pay()` — paying is `Invoice`'s job, not `Student`'s; v1 had the same behaviour claimed by two objects. |
+| `Student` | `register()`, `enrol()`, `getStatus()` | Removed `pay()` — paying is `Invoice`'s job, not `Student`'s; v1 had the same behaviour claimed by two objects. `register()` now delegates to `DocumentVerificationService` internally instead of `Student` or `IdentityService` owning verification logic. |
 | `Course` | `updateDetails()` (instance-scoped) | Renamed from `updateCatalog()`, which was ambiguous about whether it updated one course or the whole catalog. Catalog-wide changes (add/deprecate a course) live on `AcademicPlanningService.publishCourse()`. |
 | `TimetableSession` | `schedule()`, `cancel()` | Unchanged. |
 | `Invoice` | `issue()`, `pay()`, `void()` | Unchanged. |
@@ -60,8 +66,10 @@ Only two process-decomposition items actually coordinate across module boundarie
 compensation/retry logic, so only these two remain as standalone orchestrator abstractions:
 
 - **`PaymentOrchestrator`** — coordinates Billing → Notification → Audit.
-- **`IssuanceOrchestrator`** — coordinates Identity (capture/validate) → Credential Issuance
-  (generate) → Access Control (provision).
+- **`IssuanceOrchestrator`** — coordinates Identity Records (capture) → Document Verification
+  (validate) → Credential Issuance (generate) → Access Control (provision). The Identity split
+  makes this mapping exact: "capture → validate → generate → provision" is now four distinct
+  module calls instead of two steps conflated inside one module.
 
 **`ExceptionWorkflow`** replaces the old `StaffConsole` + `ExceptionOrchestrator` pair. In v1,
 both hid "which downstream module's state an override touches" — meaning they had to know
@@ -141,6 +149,52 @@ Found by critical design review; fixed here.
 - `Course.updateCatalog()` → renamed `Course.updateDetails()` (instance-scoped); catalog-wide ops moved to `AcademicPlanningService.publishCourse()`.
 - `NotificationService.notify(event)` → `event` is now a typed `NotificationEvent`, not an untyped blob.
 - `Student.pay()` → removed; payment stays solely on `Invoice`/`BillingService`.
+
+## Changelog: v2 → v3
+
+Found by running the design against a five-criteria evaluation checklist (clarity, necessity,
+coverage, single responsibility, modularity) and a five-item common-mistakes checklist
+(over-fragmentation, under-decomposition, vague naming, mixed responsibilities, leaky
+boundaries). Two genuine issues survived from v2; both are fixed here.
+
+**Fixed (mixed responsibilities):**
+- `IdentityService` was still doing two jobs — owning the student profile record *and*
+  verifying uploaded documents (a KYC-style concern, often a distinct/third-party process). Split
+  into `IdentityService` (profile record only) and `DocumentVerificationService` (document
+  submission + verification only), each with its own owned data.
+
+**Fixed (vague naming + unpinned read paths):**
+- `ReportingService.generateReport()` / `getDashboard()` were generic names that didn't say
+  *which* report — the same class of problem as `handleData()`. Renamed to
+  `generateComplianceReport()` and `generateEnrolmentDashboard()`. Each method's exact read path
+  is now pinned down in the module table (`AuditService.query()`; `AcademicPlanningService
+  .getEnrolmentStats()` and `BillingService.getFinancialSummary()`) instead of the vague "reads
+  from other services' read interfaces," closing the risk of a future reach-through into a store.
+
+**Evaluated and kept as-is (defensible, not fixed):**
+- `AuditService`/`ReportingService` and `CredentialIssuanceService`/`AccessControlService`
+  remain split. Each split is justified by a concrete difference (retention/legal requirements
+  vs. BI querying; one-time lifecycle vs. per-request decision), not fragmentation for its own
+  sake — but this is flagged as the design's most arguable trade-off, worth being ready to
+  defend rather than claiming it's beyond question.
+
+## Evaluation checklist audit (v3)
+
+| Evaluation criterion | Verdict |
+|---|---|
+| Clarity | ✅ Every interface uses an intention-revealing verb; no implementation-reading required to understand intent. |
+| Necessity | ⚠️ Mostly justified; the Audit/Reporting and Issuance/AccessControl splits are defensible trade-offs, not free of debate. |
+| Coverage | ✅ All four abstraction types present: interface (services + `Reversible`), data (owned stores + `NotificationEvent`), control (3 orchestrators), conceptual (6 domain objects). |
+| Single responsibility | ✅ Fixed in v3 — `IdentityService`/`DocumentVerificationService` split closes the last known violation. |
+| Modularity | ✅ Every module's implementation (gateway, vendor, delivery channel, encoding) is swappable behind an unchanged interface. |
+
+| Common mistake | Verdict |
+|---|---|
+| Over-fragmentation | ⚠️ Acknowledged risk in the Audit/Reporting and Issuance/AccessControl splits; each is defensible on its own merits. |
+| Under-decomposition | ✅ Not present — no remaining catch-all module. |
+| Vague naming | ✅ Fixed in v3 — `ReportingService` methods renamed to name the specific report. |
+| Mixed responsibilities | ✅ Fixed in v3 — `IdentityService` split. |
+| Leaky boundaries | ✅ Fixed — `Reversible` contract, narrowed `AuditLog`, and `ReportingService`'s read paths are now named explicitly rather than implied. |
 
 ## Defending against the common-mistakes checklist
 
