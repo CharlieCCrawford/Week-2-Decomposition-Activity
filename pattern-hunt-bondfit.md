@@ -48,3 +48,20 @@ Both analyses classed the weekly pattern as cyclical / seasonal.
 **Gap: the AI missed the trend and the anomaly.** The AI found no growth trend and no outlier. It could not have found them, because the summary is made of day-of-week averages. Averaging the same weekday across four weeks flattens the 5% growth from Week 1 to Week 4. The same averaging hides the unusually strong Friday in Week 4. The AI also reported the Friday dip as an anomaly. It is not one: it recurs every week, so it is part of the cycle. The real anomaly is the one Friday that did not dip.
 
 **Lesson:** the AI's pattern types are only as good as the decomposition we feed it. Summarising by day of week keeps the cycle but removes the time dimension. Trends and anomalies live in that time dimension.
+
+## 5. 90-second presentation (our findings compared with the AI's)
+
+**[0:00–0:15] Our two strongest patterns**
+"We found two patterns in BondFit's four weeks of data. First, daily active users jump at weekends. Saturday and Sunday average about 4,700 users, against about 3,200 on weekdays, so roughly 1.5 times as many. Second, Friday is the quietest day every week. It goes above 3,000 users only once."
+
+**[0:15–0:30] Their type**
+"We classified both patterns as **repeating**, or cyclical. Both follow the same seven-day rhythm in all four weeks."
+
+**[0:30–0:50] Where the AI agreed**
+"The AI also found the weekend peak and also called it cyclical, so we agree on our strongest pattern. It also spotted something we didn't. The busiest time of day flips: weekday use is mostly in the evening, and weekend use is mostly in the morning."
+
+**[0:50–1:10] What the AI got wrong**
+"The AI called the Friday dip an **anomaly**. We disagree. It happens every single week, so it is part of the cycle, not an exception. Our label, repeating, is the right one."
+
+**[1:10–1:30] What the AI missed**
+"The AI missed two things, because we gave it averages by day of week and those averages hide them. First, users grew about 5% from Week 1 to Week 4, which is a **trend**. Second, the one Friday that went above 3,000 users, 29 May, is the real **anomaly**. We noticed that Friday ourselves. The lesson is that an AI can only find the patterns its input still contains."
